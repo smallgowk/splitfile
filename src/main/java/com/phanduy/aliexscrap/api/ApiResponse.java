@@ -1,0 +1,35 @@
+package com.phanduy.aliexscrap.api;
+
+public class ApiResponse<T> {
+    public int status;
+
+    public String message;
+
+    public String error;
+
+    int requestCount;
+
+    int remainRequest;
+
+    private T data; // Có thể đổi thành kiểu dữ liệu phù hợp
+
+    public boolean isSuccess() {
+        return error == null;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public T getData() {
+        return data;
+    }
+
+    public int getRequestCount() {
+        return requestCount;
+    }
+
+    public int getRemainRequest() {
+        return remainRequest;
+    }
+}
