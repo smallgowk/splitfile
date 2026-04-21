@@ -1227,7 +1227,7 @@ public class ExcelUtils {
 
             /* CreationHelper helps us create instances of various things like DataFormat,
              Hyperlink, RichTextString etc, in a format (HSSF, XSSF) independent way */
-            CreationHelper createHelper = workbook.getCreationHelper();
+//            CreationHelper createHelper = workbook.getCreationHelper();
             Sheet sheet = workbook.createSheet("Data");
 
             CellStyle style = workbook.createCellStyle();

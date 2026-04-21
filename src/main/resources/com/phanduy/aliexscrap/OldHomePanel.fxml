@@ -5,7 +5,7 @@
 <?import javafx.scene.layout.*?>
 <VBox xmlns="http://javafx.com/javafx/8" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.phanduy.aliexscrap.OldHomePanelController">
     <AnchorPane xmlns="http://javafx.com/javafx/8" xmlns:fx="http://javafx.com/fxml/1"
-                prefWidth="500.0" prefHeight="700.0">
+                prefWidth="500.0" prefHeight="200.0">
 
         <children>
             <VBox spacing="10" AnchorPane.topAnchor="10" AnchorPane.bottomAnchor="10"
@@ -36,6 +36,10 @@
                 <HBox spacing="10" alignment="CENTER_LEFT">
                     <Button fx:id="startButton" text="Start"
                             onAction="#onStart"/>
+
+                    <Region fx:id="leftSpacer" HBox.hgrow="ALWAYS"/>
+                    <Label fx:id="statusLabel" text="" style="-fx-text-fill: blue;" alignment="CENTER"/>
+                    <Region fx:id="rightSpacer" HBox.hgrow="ALWAYS"/>
                 </HBox>
             </VBox>
         </children>

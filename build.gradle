@@ -7,7 +7,7 @@ plugins {
 }
 
 group 'com.phanduy.aliexscrap'
-version '1.1.6'
+version '0.0.1'
 
 task createProperties(dependsOn: processResources) {
   doLast {
@@ -155,8 +155,8 @@ jlink {
     name = 'app'
   }
   jpackage {
-    imageName = 'AliexScrap'
-    installerName = 'AliexScrapInstaller'
+    imageName = 'SplitProduct'
+    installerName = 'SplitProductInstaller'
     installerType = 'exe'
     icon = file('src/main/resources/image/aliexscrap.ico').absolutePath
     appVersion = version

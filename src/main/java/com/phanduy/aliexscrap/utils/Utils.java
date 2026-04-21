@@ -521,4 +521,23 @@ public class Utils {
         }
         return results;
     }
+
+    public static String getFileNameWithoutExtension(String filePath) {
+        if (filePath == null || filePath.trim().isEmpty()) {
+            return "";
+        }
+
+        Path path = Paths.get(filePath);
+        String fileName = path.getFileName().toString();
+
+        int lastDotIndex = fileName.lastIndexOf('.');
+
+        // Không có dấu chấm, hoặc file kiểu ".gitignore"
+        if (lastDotIndex <= 0) {
+            return fileName;
+        }
+
+        return fileName.substring(0, lastDotIndex);
+    }
+
 }

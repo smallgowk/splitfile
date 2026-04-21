@@ -87,6 +87,7 @@ import java.io.FileOutputStream;
 import java.util.stream.Stream;
 
 public class OldHomePanelController {
+    @FXML private Label statusLabel;
     @FXML private Button browseProductFile;
     @FXML private TextField numOfProductField;
     @FXML private TextField productFileField;
@@ -103,7 +104,7 @@ public class OldHomePanelController {
     }
 
     @FXML
-    private void onStart() {
+    private void onStart() throws IOException {
         String numOfProductStr = numOfProductField.getText();
         int numOfProduct = 0;
         try {
@@ -132,7 +133,40 @@ public class OldHomePanelController {
             return;
         }
 
+        final int count = numOfProduct;
 
+        statusLabel.setText("Đang xử lý...");
+        Thread thread = new Thread(
+                () -> {
+                    try {
+                        String folderPath = filePath.substring(0, filePath.lastIndexOf("\\"));
+                        SplitResult splitResult = ExcelReader.splitFile(filePath, count);
+                        Platform.runLater(() -> {
+                            statusLabel.setText("");
+                            boolean result = AlertUtil.showAlert("Hoàn thành", "Đã tách xong!\n" + splitResult.totalProduct + " products\n" + splitResult.totalPage + " pages");
+                            if (result) {
+                                try {
+                                    File folder = new File(folderPath);
+
+                                    if (!Desktop.isDesktopSupported()) {
+                                        System.out.println("Desktop không được hỗ trợ");
+                                        return;
+                                    }
+
+                                    Desktop.getDesktop().open(folder);
+
+                                } catch (Exception e) {
+                                    e.printStackTrace();
+                                }
+                            }
+                        });
+                    } catch (IOException e) {
+                        System.out.println(e);
+                        Platform.runLater(() -> AlertUtil.showAlert("Lỗi", e.getMessage()));
+                    }
+                }
+        );
+        thread.start();
     }
 
 
