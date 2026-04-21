@@ -278,88 +278,86 @@ public class ExcelReader {
          try (FileInputStream fis = new FileInputStream(filePath);
               Workbook workbook = WorkbookFactory.create(fis)) {
 
-             // Đọc sheet "Sheet1"
-             Sheet sheet = workbook.getSheet("TEMPLATE");
-             if (sheet == null) {
-                 sheet = workbook.getSheet("Template");
-             }
-
+            Sheet sheet = selectTemplateSheet(workbook);
              if (sheet == null) {
                  throw new IOException("Sheet 'Template' không tồn tại trong file Excel");
              }
 
-             Row firstRow = sheet.getRow(0);
-             int maxColumn = firstRow.getLastCellNum();
              int maxRow = sheet.getLastRowNum();
+            int[] headerInfo = findHeaderRowAndIndexes(sheet);
+            if (headerInfo == null) {
+                throw new IOException("Không tìm thấy header chứa Product Name và Seller SKU");
+            }
+            int headerRowIndex = headerInfo[0];
+            int productNameColumnIndex = headerInfo[1];
+            int skuColumnIndex = headerInfo[2];
+            int maxColumn = Math.max(getMaxColumn(sheet, headerRowIndex), Math.max(productNameColumnIndex, skuColumnIndex) + 1);
+
              HashMap<Integer, ArrayList<String>> hashMapData = new HashMap<>();
              HashMap<Integer, ArrayList<String>> hashMapHeaderData = new HashMap<>();
              int pageIndex = 1;
              HashMap<Integer, Integer> mappingPage = new HashMap<>();
-             HashSet<String> productNamesSet = new HashSet<>();
-             int productNameColumnIndex = -1;
-             int skuColumnIndex = -1;
+            HashSet<String> pageProductKeys = new HashSet<>();
              int tempProductCount = 0;
              int totalProduct = 0;
-             boolean isDataRow = false;
+            int firstDataRowIndex = -1;
+            int currentPageLastRow = -1;
+
              for (int i = 0; i <= maxRow; i++) {
                  Row row = sheet.getRow(i);
+                boolean rowIsData = false;
                  ArrayList<String> datas = new ArrayList<>();
-                 String productName = null;
-                 for (int j = 0; j <= maxColumn; j++) {
-                     Cell cell = row.getCell(j);
+                for (int j = 0; j < maxColumn; j++) {
+                    Cell cell = row == null ? null : row.getCell(j);
                      String cellValue = getCellValue(cell);
-//                     System.out.println(cellValue);
                      datas.add(cellValue);
-                     if (productNameColumnIndex < 0 && cellValue.equals("Product Name")) {
-                         productNameColumnIndex = j;
-                     }
-                     if (skuColumnIndex < 0) {
-                         if (cellValue.equals("Seller SKU") || cellValue.equals("seller_sku") || cellValue.equals("item_sku")) {
-                             skuColumnIndex = j;
-                         }
-                         mappingPage.put(pageIndex, i);
-                     }
-                     else if (skuColumnIndex > 0 && j == productNameColumnIndex) {
-                         productName = cellValue;
-                     }
-                     else if (j == skuColumnIndex && isSkuFormat(cellValue)) {
-                         isDataRow = true;
-//                         long count = cellValue.chars()
-//                                 .filter(ch -> ch == '_')
-//                                 .count();
-                         if (!productNamesSet.contains(productName)) {
-                             productNamesSet.add(productName);
-                             tempProductCount ++;
-                             totalProduct ++;
-                             if (tempProductCount <= productCount) {
-                                 mappingPage.put(pageIndex, i);
-                             } else {
-                                 tempProductCount = 1;
-                                 pageIndex ++;
-                                 mappingPage.put(pageIndex, i);
-                             }
-                         } else {
-                             mappingPage.put(pageIndex, i);
-                         }
-                     }
                  }
 
-                 if (isDataRow) {
+                if (i > headerRowIndex && row != null) {
+                    String skuValue = getCellValue(row.getCell(skuColumnIndex));
+                    String productName = getCellValue(row.getCell(productNameColumnIndex));
+                    rowIsData = isDataRow(skuValue, productName);
+                    if (rowIsData) {
+                        String productKey = extractRootSku(skuValue);
+                        if (!pageProductKeys.contains(productKey)) {
+                            if (productCount > 0 && tempProductCount >= productCount && currentPageLastRow >= 0) {
+                                mappingPage.put(pageIndex, currentPageLastRow);
+                                pageIndex++;
+                                pageProductKeys.clear();
+                                tempProductCount = 0;
+                            }
+                            pageProductKeys.add(productKey);
+                            tempProductCount++;
+                            totalProduct++;
+                        }
+                    }
+                }
+
+                if (rowIsData) {
+                    if (firstDataRowIndex < 0) {
+                        firstDataRowIndex = i;
+                    }
+                    currentPageLastRow = i;
                      hashMapData.put(i, datas);
-                 } else {
+                } else if (firstDataRowIndex < 0) {
                      hashMapHeaderData.put(i, datas);
                  }
              }
-             System.out.println("Total " + totalProduct + " products");
-             int firstRowPage = hashMapHeaderData.size();
-             for (int i = 1; i <= pageIndex; i++) {
-//                 System.out.println();
-                 int maxIndexPage = mappingPage.get(i);
-                 System.out.println("Page " + i + " from " + firstRowPage + " to " + maxIndexPage);
 
-//                 for (int j = firstRowPage; j <= maxIndexPage; j++) {
-//                     System.out.println();
-//                 }
+            if (currentPageLastRow >= 0) {
+                mappingPage.put(pageIndex, currentPageLastRow);
+            }
+
+             System.out.println("Total " + totalProduct + " products");
+            if (firstDataRowIndex < 0 || mappingPage.isEmpty()) {
+                return new SplitResult(totalProduct, productCount, 0);
+            }
+
+            int firstRowPage = firstDataRowIndex;
+            int totalPages = mappingPage.size();
+            for (int i = 1; i <= totalPages; i++) {
+                int maxIndexPage = mappingPage.get(i);
+                 System.out.println("Page " + i + " from " + firstRowPage + " to " + maxIndexPage);
 
                  try {
                      writePage(folderPath, fileName, productCount, hashMapHeaderData, hashMapData, i, firstRowPage, maxIndexPage);
@@ -372,7 +370,7 @@ public class ExcelReader {
              return new SplitResult(
                      totalProduct,
                      productCount,
-                     pageIndex
+                    totalPages
              );
          }
      }
@@ -382,8 +380,86 @@ public class ExcelReader {
 //    }
 
     public static boolean isSkuFormat(String input) {
-//        return input != null && input.matches("^(GG_?|)\\d+_\\d+(_\\d+)?$") && input.contains("_");
-        return input != null && input.startsWith("GG");
+        return input != null && input.matches("^(?=.*\\d)[A-Za-z]{2}[A-Za-z0-9_-]*$");
+    }
+
+    private static boolean isDataRow(String skuValue, String productName) {
+        return isSkuFormat(skuValue) && productName != null && !productName.trim().isEmpty();
+    }
+
+    private static String extractRootSku(String skuValue) {
+        if (skuValue == null) {
+            return "";
+        }
+        String normalized = skuValue.trim();
+        if (normalized.matches("^.+_\\d{1,3}$")) {
+            return normalized.replaceFirst("_\\d{1,3}$", "");
+        }
+        return normalized;
+    }
+
+    private static int getMaxColumn(Sheet sheet, int fallbackRowIndex) {
+        int maxColumn = 0;
+        for (int i = 0; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row != null) {
+                maxColumn = Math.max(maxColumn, row.getLastCellNum());
+            }
+        }
+        if (maxColumn > 0) {
+            return maxColumn;
+        }
+        Row fallbackRow = sheet.getRow(fallbackRowIndex);
+        return fallbackRow == null ? 0 : fallbackRow.getLastCellNum();
+    }
+
+    private static Sheet selectTemplateSheet(Workbook workbook) {
+        Sheet sheet = workbook.getSheet("TEMPLATE");
+        if (sheet == null) {
+            sheet = workbook.getSheet("Template");
+        }
+        if (sheet == null) {
+            sheet = workbook.getSheet("Data");
+        }
+        if (sheet == null && workbook.getNumberOfSheets() > 0) {
+            sheet = workbook.getSheetAt(0);
+        }
+        return sheet;
+    }
+
+    private static int[] findHeaderRowAndIndexes(Sheet sheet) {
+        for (int i = 0; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row == null) {
+                continue;
+            }
+            int productNameIndex = -1;
+            int skuIndex = -1;
+            for (int j = 0; j < row.getLastCellNum(); j++) {
+                String cellValue = getCellValue(row.getCell(j));
+                if (cellValue == null || cellValue.isEmpty()) {
+                    continue;
+                }
+                if (productNameIndex < 0 && "product name".equalsIgnoreCase(cellValue)) {
+                    productNameIndex = j;
+                }
+                if (skuIndex < 0 && isSkuHeader(cellValue)) {
+                    skuIndex = j;
+                }
+            }
+            if (productNameIndex >= 0 && skuIndex >= 0) {
+                return new int[]{i, productNameIndex, skuIndex};
+            }
+        }
+        return null;
+    }
+
+    private static boolean isSkuHeader(String value) {
+        if (value == null) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase();
+        return "seller sku".equals(normalized) || "seller_sku".equals(normalized) || "item_sku".equals(normalized);
     }
 
 //    public static boolean isSkuFormat(String input) {
@@ -401,9 +477,14 @@ public class ExcelReader {
         try {
             Sheet sheet = workbook.createSheet("Data");
             int rowIndex = 0;
-            for (int i = 0, size = headerMap.size(); i < size; i++) {
+            ArrayList<Integer> headerRows = new ArrayList<>(headerMap.keySet());
+            Collections.sort(headerRows);
+            for (Integer headerRowIndex : headerRows) {
                 Row row = sheet.createRow(rowIndex++);
-                ArrayList<String> headers = headerMap.get(i);
+                ArrayList<String> headers = headerMap.get(headerRowIndex);
+                if (headers == null) {
+                    continue;
+                }
                 for (int j = 0, colSize = headers.size(); j < colSize; j++) {
                     String value = headers.get(j);
                     Cell cell = row.createCell(j);
@@ -412,8 +493,11 @@ public class ExcelReader {
             }
 
             for (int i = firstRow; i <= lastRow; i++) {
-                Row row = sheet.createRow(rowIndex++);
                 ArrayList<String> datas = dataMap.get(i);
+                if (datas == null) {
+                    continue;
+                }
+                Row row = sheet.createRow(rowIndex++);
                 for (int j = 0, colSize = datas.size(); j < colSize; j++) {
                     String value = datas.get(j);
                     Cell cell = row.createCell(j);
