@@ -293,6 +293,7 @@ public class ExcelReader {
             int headerRowIndex = headerInfo[0];
             int productNameColumnIndex = headerInfo[1];
             int skuColumnIndex = headerInfo[2];
+            int productDescriptionColumnIndex = findColumnIndexByHeaderName(sheet, headerRowIndex, "Product Description");
             int maxColumn = Math.max(getMaxColumn(sheet, headerRowIndex), Math.max(productNameColumnIndex, skuColumnIndex) + 1);
 
              int pageIndex = 1;
@@ -352,7 +353,18 @@ public class ExcelReader {
                  System.out.println("Page " + i + " from " + firstRowPage + " to " + maxIndexPage);
 
                  try {
-                    writePage(folderPath, fileName, productCount, sheet, maxColumn, headerLastRow, i, firstRowPage, maxIndexPage);
+                    writePage(
+                            folderPath,
+                            fileName,
+                            productCount,
+                            sheet,
+                            maxColumn,
+                            headerLastRow,
+                            productDescriptionColumnIndex,
+                            i,
+                            firstRowPage,
+                            maxIndexPage
+                    );
                  } catch (Exception e) {
                      System.out.println(e.getMessage());
                  }
@@ -454,11 +466,25 @@ public class ExcelReader {
         return "seller sku".equals(normalized) || "seller_sku".equals(normalized) || "item_sku".equals(normalized);
     }
 
+    private static int findColumnIndexByHeaderName(Sheet sheet, int headerRowIndex, String headerName) {
+        Row headerRow = sheet.getRow(headerRowIndex);
+        if (headerRow == null || headerName == null) {
+            return -1;
+        }
+        for (int i = 0; i < headerRow.getLastCellNum(); i++) {
+            String value = getCellValue(headerRow.getCell(i));
+            if (headerName.equalsIgnoreCase(value)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
 //    public static boolean isSkuFormat(String input) {
 //        return input != null && input.matches("^(?=.*\\d)(?=.*_)[0-9_]+$");
 //    }
 
-    public static void writePage(String folder, String fileName, int productCount, Sheet sourceSheet, int maxColumn, int headerLastRow, int page, int firstRow, int lastRow) throws Exception {
+    public static void writePage(String folder, String fileName, int productCount, Sheet sourceSheet, int maxColumn, int headerLastRow, int productDescriptionColumnIndex, int page, int firstRow, int lastRow) throws Exception {
         String filePath = folder + "\\" + fileName + "_split" + productCount + "_page_" + page + ".xlsx";
 
         FileOutputStream fileOut = null;
@@ -468,18 +494,19 @@ public class ExcelReader {
         try {
             Sheet sheet = workbook.createSheet(sourceSheet.getSheetName());
             Map<Integer, CellStyle> styleCache = new HashMap<>();
+            Map<Integer, CellStyle> nowrapStyleCache = new HashMap<>();
 
             copyColumnSettings(sourceSheet, sheet, maxColumn);
             copyFreezePane(sourceSheet, sheet);
 
             int rowIndex = 0;
             if (headerLastRow >= 0) {
-                copyRowsWithStyle(sourceSheet, sheet, 0, headerLastRow, rowIndex, maxColumn, workbook, styleCache);
+                copyRowsWithStyle(sourceSheet, sheet, 0, headerLastRow, rowIndex, maxColumn, workbook, styleCache, nowrapStyleCache, -1);
                 copyMergedRegionsInRange(sourceSheet, sheet, 0, headerLastRow, rowIndex);
                 rowIndex += (headerLastRow + 1);
             }
 
-            copyRowsWithStyle(sourceSheet, sheet, firstRow, lastRow, rowIndex, maxColumn, workbook, styleCache);
+            copyRowsWithStyle(sourceSheet, sheet, firstRow, lastRow, rowIndex, maxColumn, workbook, styleCache, nowrapStyleCache, productDescriptionColumnIndex);
             copyMergedRegionsInRange(sourceSheet, sheet, firstRow, lastRow, rowIndex);
 
             fileOut = new FileOutputStream(filePath);
@@ -506,7 +533,9 @@ public class ExcelReader {
             int targetStartRow,
             int maxColumn,
             Workbook targetWorkbook,
-            Map<Integer, CellStyle> styleCache
+            Map<Integer, CellStyle> styleCache,
+            Map<Integer, CellStyle> nowrapStyleCache,
+            int nowrapColumnIndex
     ) {
         if (sourceStartRow > sourceEndRow) {
             return;
@@ -528,7 +557,8 @@ public class ExcelReader {
                     continue;
                 }
                 Cell targetCell = targetRow.createCell(colIndex, sourceCell.getCellType());
-                copyCellValueAndStyle(sourceCell, targetCell, targetWorkbook, styleCache);
+                boolean disableWrap = nowrapColumnIndex >= 0 && colIndex == nowrapColumnIndex;
+                copyCellValueAndStyle(sourceCell, targetCell, targetWorkbook, styleCache, nowrapStyleCache, disableWrap);
             }
         }
     }
@@ -537,7 +567,9 @@ public class ExcelReader {
             Cell sourceCell,
             Cell targetCell,
             Workbook targetWorkbook,
-            Map<Integer, CellStyle> styleCache
+            Map<Integer, CellStyle> styleCache,
+            Map<Integer, CellStyle> nowrapStyleCache,
+            boolean disableWrap
     ) {
         if (sourceCell == null || targetCell == null) {
             return;
@@ -545,7 +577,9 @@ public class ExcelReader {
 
         CellStyle sourceStyle = sourceCell.getCellStyle();
         if (sourceStyle != null) {
-            CellStyle targetStyle = getOrCreateTargetStyle(targetWorkbook, sourceStyle, styleCache);
+            CellStyle targetStyle = disableWrap
+                    ? getOrCreateNoWrapTargetStyle(targetWorkbook, sourceStyle, styleCache, nowrapStyleCache)
+                    : getOrCreateTargetStyle(targetWorkbook, sourceStyle, styleCache);
             targetCell.setCellStyle(targetStyle);
         }
 
@@ -589,6 +623,26 @@ public class ExcelReader {
         targetStyle.cloneStyleFrom(sourceStyle);
         styleCache.put(sourceStyleIndex, targetStyle);
         return targetStyle;
+    }
+
+    private static CellStyle getOrCreateNoWrapTargetStyle(
+            Workbook targetWorkbook,
+            CellStyle sourceStyle,
+            Map<Integer, CellStyle> styleCache,
+            Map<Integer, CellStyle> nowrapStyleCache
+    ) {
+        int sourceStyleIndex = sourceStyle.getIndex();
+        CellStyle cachedStyle = nowrapStyleCache.get(sourceStyleIndex);
+        if (cachedStyle != null) {
+            return cachedStyle;
+        }
+
+        CellStyle baseStyle = getOrCreateTargetStyle(targetWorkbook, sourceStyle, styleCache);
+        CellStyle nowrapStyle = targetWorkbook.createCellStyle();
+        nowrapStyle.cloneStyleFrom(baseStyle);
+        nowrapStyle.setWrapText(false);
+        nowrapStyleCache.put(sourceStyleIndex, nowrapStyle);
+        return nowrapStyle;
     }
 
     private static void copyColumnSettings(Sheet sourceSheet, Sheet targetSheet, int maxColumn) {
