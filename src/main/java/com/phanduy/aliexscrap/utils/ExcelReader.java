@@ -5,6 +5,8 @@ import com.phanduy.aliexscrap.model.SettingInfo;
 import com.phanduy.aliexscrap.model.ProductPage;
 import com.phanduy.aliexscrap.model.response.NewTransformCrawlResponse;
 import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.ss.util.PaneInformation;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.File;
@@ -293,10 +295,8 @@ public class ExcelReader {
             int skuColumnIndex = headerInfo[2];
             int maxColumn = Math.max(getMaxColumn(sheet, headerRowIndex), Math.max(productNameColumnIndex, skuColumnIndex) + 1);
 
-             HashMap<Integer, ArrayList<String>> hashMapData = new HashMap<>();
-             HashMap<Integer, ArrayList<String>> hashMapHeaderData = new HashMap<>();
              int pageIndex = 1;
-             HashMap<Integer, Integer> mappingPage = new HashMap<>();
+             Map<Integer, Integer> mappingPage = new LinkedHashMap<>();
             HashSet<String> pageProductKeys = new HashSet<>();
              int tempProductCount = 0;
              int totalProduct = 0;
@@ -306,12 +306,6 @@ public class ExcelReader {
              for (int i = 0; i <= maxRow; i++) {
                  Row row = sheet.getRow(i);
                 boolean rowIsData = false;
-                 ArrayList<String> datas = new ArrayList<>();
-                for (int j = 0; j < maxColumn; j++) {
-                    Cell cell = row == null ? null : row.getCell(j);
-                     String cellValue = getCellValue(cell);
-                     datas.add(cellValue);
-                 }
 
                 if (i > headerRowIndex && row != null) {
                     String skuValue = getCellValue(row.getCell(skuColumnIndex));
@@ -338,10 +332,7 @@ public class ExcelReader {
                         firstDataRowIndex = i;
                     }
                     currentPageLastRow = i;
-                     hashMapData.put(i, datas);
-                } else if (firstDataRowIndex < 0) {
-                     hashMapHeaderData.put(i, datas);
-                 }
+                }
              }
 
             if (currentPageLastRow >= 0) {
@@ -355,12 +346,13 @@ public class ExcelReader {
 
             int firstRowPage = firstDataRowIndex;
             int totalPages = mappingPage.size();
+            int headerLastRow = Math.max(firstDataRowIndex - 1, 0);
             for (int i = 1; i <= totalPages; i++) {
                 int maxIndexPage = mappingPage.get(i);
                  System.out.println("Page " + i + " from " + firstRowPage + " to " + maxIndexPage);
 
                  try {
-                     writePage(folderPath, fileName, productCount, hashMapHeaderData, hashMapData, i, firstRowPage, maxIndexPage);
+                    writePage(folderPath, fileName, productCount, sheet, maxColumn, headerLastRow, i, firstRowPage, maxIndexPage);
                  } catch (Exception e) {
                      System.out.println(e.getMessage());
                  }
@@ -466,44 +458,30 @@ public class ExcelReader {
 //        return input != null && input.matches("^(?=.*\\d)(?=.*_)[0-9_]+$");
 //    }
 
-    public static void writePage(String folder, String fileName, int productCount, HashMap<Integer, ArrayList<String>> headerMap, HashMap<Integer, ArrayList<String>> dataMap, int page, int firstRow, int lastRow) throws Exception {
-//        File outerFile = new File(folder + "\\page_" + page + ".xlsx");
+    public static void writePage(String folder, String fileName, int productCount, Sheet sourceSheet, int maxColumn, int headerLastRow, int page, int firstRow, int lastRow) throws Exception {
         String filePath = folder + "\\" + fileName + "_split" + productCount + "_page_" + page + ".xlsx";
 
         FileOutputStream fileOut = null;
 
-        Workbook workbook = new XSSFWorkbook();;
+        Workbook workbook = new XSSFWorkbook();
 
         try {
-            Sheet sheet = workbook.createSheet("Data");
+            Sheet sheet = workbook.createSheet(sourceSheet.getSheetName());
+            Map<Integer, CellStyle> styleCache = new HashMap<>();
+
+            copyColumnSettings(sourceSheet, sheet, maxColumn);
+            copyFreezePane(sourceSheet, sheet);
+
             int rowIndex = 0;
-            ArrayList<Integer> headerRows = new ArrayList<>(headerMap.keySet());
-            Collections.sort(headerRows);
-            for (Integer headerRowIndex : headerRows) {
-                Row row = sheet.createRow(rowIndex++);
-                ArrayList<String> headers = headerMap.get(headerRowIndex);
-                if (headers == null) {
-                    continue;
-                }
-                for (int j = 0, colSize = headers.size(); j < colSize; j++) {
-                    String value = headers.get(j);
-                    Cell cell = row.createCell(j);
-                    cell.setCellValue(value);
-                }
+            if (headerLastRow >= 0) {
+                copyRowsWithStyle(sourceSheet, sheet, 0, headerLastRow, rowIndex, maxColumn, workbook, styleCache);
+                copyMergedRegionsInRange(sourceSheet, sheet, 0, headerLastRow, rowIndex);
+                rowIndex += (headerLastRow + 1);
             }
 
-            for (int i = firstRow; i <= lastRow; i++) {
-                ArrayList<String> datas = dataMap.get(i);
-                if (datas == null) {
-                    continue;
-                }
-                Row row = sheet.createRow(rowIndex++);
-                for (int j = 0, colSize = datas.size(); j < colSize; j++) {
-                    String value = datas.get(j);
-                    Cell cell = row.createCell(j);
-                    cell.setCellValue(value);
-                }
-            }
+            copyRowsWithStyle(sourceSheet, sheet, firstRow, lastRow, rowIndex, maxColumn, workbook, styleCache);
+            copyMergedRegionsInRange(sourceSheet, sheet, firstRow, lastRow, rowIndex);
+
             fileOut = new FileOutputStream(filePath);
             workbook.write(fileOut);
         } catch (Exception e) {
@@ -516,6 +494,154 @@ public class ExcelReader {
                 }
             } catch (IOException ex) {
                 Logger.getLogger(ExcelUtils.class.getName()).log(Level.SEVERE, null, ex);
+            }
+        }
+    }
+
+    private static void copyRowsWithStyle(
+            Sheet sourceSheet,
+            Sheet targetSheet,
+            int sourceStartRow,
+            int sourceEndRow,
+            int targetStartRow,
+            int maxColumn,
+            Workbook targetWorkbook,
+            Map<Integer, CellStyle> styleCache
+    ) {
+        if (sourceStartRow > sourceEndRow) {
+            return;
+        }
+        for (int sourceRowIndex = sourceStartRow; sourceRowIndex <= sourceEndRow; sourceRowIndex++) {
+            int targetRowIndex = targetStartRow + (sourceRowIndex - sourceStartRow);
+            Row sourceRow = sourceSheet.getRow(sourceRowIndex);
+            Row targetRow = targetSheet.createRow(targetRowIndex);
+            if (sourceRow == null) {
+                continue;
+            }
+            if (sourceRow.getHeight() != sourceSheet.getDefaultRowHeight()) {
+                targetRow.setHeight(sourceRow.getHeight());
+            }
+            targetRow.setZeroHeight(sourceRow.getZeroHeight());
+            for (int colIndex = 0; colIndex < maxColumn; colIndex++) {
+                Cell sourceCell = sourceRow.getCell(colIndex);
+                if (sourceCell == null) {
+                    continue;
+                }
+                Cell targetCell = targetRow.createCell(colIndex, sourceCell.getCellType());
+                copyCellValueAndStyle(sourceCell, targetCell, targetWorkbook, styleCache);
+            }
+        }
+    }
+
+    private static void copyCellValueAndStyle(
+            Cell sourceCell,
+            Cell targetCell,
+            Workbook targetWorkbook,
+            Map<Integer, CellStyle> styleCache
+    ) {
+        if (sourceCell == null || targetCell == null) {
+            return;
+        }
+
+        CellStyle sourceStyle = sourceCell.getCellStyle();
+        if (sourceStyle != null) {
+            CellStyle targetStyle = getOrCreateTargetStyle(targetWorkbook, sourceStyle, styleCache);
+            targetCell.setCellStyle(targetStyle);
+        }
+
+        switch (sourceCell.getCellType()) {
+            case STRING:
+                targetCell.setCellValue(sourceCell.getRichStringCellValue());
+                break;
+            case NUMERIC:
+                targetCell.setCellValue(sourceCell.getNumericCellValue());
+                break;
+            case BOOLEAN:
+                targetCell.setCellValue(sourceCell.getBooleanCellValue());
+                break;
+            case FORMULA:
+                targetCell.setCellFormula(sourceCell.getCellFormula());
+                break;
+            case BLANK:
+                targetCell.setBlank();
+                break;
+            case ERROR:
+                targetCell.setCellErrorValue(sourceCell.getErrorCellValue());
+                break;
+            default:
+                targetCell.setCellValue(getCellValue(sourceCell));
+                break;
+        }
+    }
+
+    private static CellStyle getOrCreateTargetStyle(
+            Workbook targetWorkbook,
+            CellStyle sourceStyle,
+            Map<Integer, CellStyle> styleCache
+    ) {
+        int sourceStyleIndex = sourceStyle.getIndex();
+        CellStyle cachedStyle = styleCache.get(sourceStyleIndex);
+        if (cachedStyle != null) {
+            return cachedStyle;
+        }
+
+        CellStyle targetStyle = targetWorkbook.createCellStyle();
+        targetStyle.cloneStyleFrom(sourceStyle);
+        styleCache.put(sourceStyleIndex, targetStyle);
+        return targetStyle;
+    }
+
+    private static void copyColumnSettings(Sheet sourceSheet, Sheet targetSheet, int maxColumn) {
+        targetSheet.setDefaultColumnWidth(sourceSheet.getDefaultColumnWidth());
+        targetSheet.setDefaultRowHeight(sourceSheet.getDefaultRowHeight());
+        targetSheet.setDefaultRowHeightInPoints(sourceSheet.getDefaultRowHeightInPoints());
+        for (int colIndex = 0; colIndex < maxColumn; colIndex++) {
+            targetSheet.setColumnWidth(colIndex, sourceSheet.getColumnWidth(colIndex));
+            targetSheet.setColumnHidden(colIndex, sourceSheet.isColumnHidden(colIndex));
+        }
+    }
+
+    private static void copyFreezePane(Sheet sourceSheet, Sheet targetSheet) {
+        PaneInformation paneInformation = sourceSheet.getPaneInformation();
+        if (paneInformation == null || !paneInformation.isFreezePane()) {
+            return;
+        }
+        targetSheet.createFreezePane(
+                paneInformation.getVerticalSplitPosition(),
+                paneInformation.getHorizontalSplitPosition(),
+                paneInformation.getVerticalSplitLeftColumn(),
+                paneInformation.getHorizontalSplitTopRow()
+        );
+    }
+
+    private static void copyMergedRegionsInRange(
+            Sheet sourceSheet,
+            Sheet targetSheet,
+            int sourceStartRow,
+            int sourceEndRow,
+            int targetStartRow
+    ) {
+        if (sourceStartRow > sourceEndRow) {
+            return;
+        }
+        int mergedCount = sourceSheet.getNumMergedRegions();
+        for (int i = 0; i < mergedCount; i++) {
+            CellRangeAddress region = sourceSheet.getMergedRegion(i);
+            if (region.getFirstRow() < sourceStartRow || region.getLastRow() > sourceEndRow) {
+                continue;
+            }
+            int targetFirstRow = targetStartRow + (region.getFirstRow() - sourceStartRow);
+            int targetLastRow = targetStartRow + (region.getLastRow() - sourceStartRow);
+            CellRangeAddress newRegion = new CellRangeAddress(
+                    targetFirstRow,
+                    targetLastRow,
+                    region.getFirstColumn(),
+                    region.getLastColumn()
+            );
+            try {
+                targetSheet.addMergedRegion(newRegion);
+            } catch (Exception ignored) {
+                // Skip invalid/overlapping merged regions in output sheet.
             }
         }
     }
